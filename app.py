@@ -159,6 +159,16 @@ if "last_mode" not in st.session_state:
 if "quiz_answers" not in st.session_state:
     st.session_state.quiz_answers = {}
 
+# Session state variables for token tracking
+if "input_tokens" not in st.session_state:
+    st.session_state.input_tokens = 0
+
+if "output_tokens" not in st.session_state:
+    st.session_state.output_tokens = 0
+
+if "total_tokens" not in st.session_state:
+    st.session_state.total_tokens = 0
+
 # -------------------------
 # CLIENT
 # -------------------------
@@ -321,13 +331,26 @@ def generate_response(topic,mode,audience,language,style,length_guide,prompt_typ
         with st.spinner("AI is preparing your learning material..."):
 
             response = client.models.generate_content(
-                model="gemini-3.8-flash",
+                model="gemini-3.6-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=schema
                 )
             )
+
+            usage = response.usage_metadata
+
+            if usage:
+                input_tokens = usage.prompt_token_count or 0
+                output_tokens = usage.candidates_token_count or 0
+                total_tokens = usage.total_token_count or 0
+
+            else:
+                st.session_state.input_tokens = 0
+                st.session_state.output_tokens = 0
+                st.session_state.total_tokens = 0
+
             data=json.loads(response.text)
 
             if mode == "Quiz":
@@ -347,7 +370,7 @@ def generate_response(topic,mode,audience,language,style,length_guide,prompt_typ
         print(f"Technical error: {error}")
         st.error(
             "Unable to generate your response. "
-            "Please check your internet connection and try again."
+            "Please try again."
         )
 
 
@@ -390,6 +413,14 @@ if st.session_state.result:
     st.caption(
         f"Topic: {st.session_state.last_topic}"
     )
+
+    # -------------------------
+    # DISPLAY TOKEN USAGE METrics
+    # -------------------------
+    col1, col2, col3 = st.columns(3)
+    col1.metric("📥 Input Tokens", st.session_state.input_tokens)
+    col2.metric("📤 Output Tokens", st.session_state.output_tokens)
+    col3.metric("📊 Total Tokens", st.session_state.total_tokens)
 
     with st.container(border=True):
 
@@ -470,4 +501,7 @@ if st.session_state.result:
         st.session_state.last_topic = ""
         st.session_state.last_mode = ""
         st.session_state.quiz_answers = {}
+        st.session_state.input_tokens = 0
+        st.session_state.output_tokens = 0
+        st.session_state.total_tokens = 0
         st.rerun()

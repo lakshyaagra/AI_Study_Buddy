@@ -1,6 +1,8 @@
 import os
+import json
 import streamlit as st
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 st.set_page_config(
@@ -16,6 +18,129 @@ st.caption("Your personal AI-powered learning assistant.")
 
 st.divider()
 
+
+def get_schema(mode):
+
+    schemas = {
+        "Explain": EXPLAIN_SCHEMA,
+        "Summarize": SUMMARY_SCHEMA,
+        "Quiz": QUIZ_SCHEMA
+    }
+
+    return schemas[mode]
+
+# -------------------------
+# SCHEMA
+# -------------------------
+
+
+EXPLAIN_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "title": {"type": "STRING"},
+        "definition": {"type": "STRING"},
+        "key_points": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"}
+        },
+        "example": {
+            "type": "STRING",
+            "description": "Provide a practical C++ code example. Return only the code, without Markdown code fences."
+
+        }
+    },
+    "required": ["title", "definition", "key_points", "example"]
+}
+
+SUMMARY_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "title": {"type": "STRING"},
+        "summary": {"type": "STRING"},
+        "key_points": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"}
+        }
+    },
+    "required": ["title", "summary", "key_points"]
+}
+
+QUIZ_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "topic": {"type": "STRING"},
+        "questions": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "question": {"type": "STRING"},
+                    "options": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"}
+                    },
+                    "correct_answer": {"type": "STRING"},
+                    "explanation": {"type": "STRING"}
+                },
+                "required": [
+                    "question",
+                    "options",
+                    "correct_answer",
+                    "explanation"
+                ]
+            }
+        }
+    },
+    "required": ["topic", "questions"]
+}
+
+
+def validate_quiz(data):
+
+    if not isinstance(data, dict):
+        return False
+
+    if not isinstance(data.get("topic"), str) or not data["topic"].strip():
+        return False
+
+    questions = data.get("questions")
+
+    if not isinstance(questions, list) or len(questions) != 5:
+        return False
+
+    for question in questions:
+
+        if not isinstance(question, dict):
+            return False
+
+        required = [
+            "question",
+            "options",
+            "correct_answer",
+            "explanation"
+        ]
+
+        if not all(key in question for key in required):
+            return False
+
+        options = question["options"]
+
+        if not isinstance(options, list) or len(options) != 4:
+            return False
+
+        if not all(isinstance(option, str) and option.strip() for option in options):
+            return False
+
+        if question["correct_answer"] not in options:
+            return False
+
+        if not all(
+            isinstance(question[key], str) and question[key].strip()
+            for key in ["question", "correct_answer", "explanation"]
+        ):
+            return False
+
+    return True
 # -------------------------
 # SESSION STATE
 # -------------------------
@@ -23,13 +148,16 @@ st.divider()
 API_KEY = os.getenv("GEMINI_API_KEY")
 
 if "result" not in st.session_state:
-    st.session_state.result = ""
+    st.session_state.result = None
 
 if "last_topic" not in st.session_state:
     st.session_state.last_topic = ""
 
 if "last_mode" not in st.session_state:
     st.session_state.last_mode = ""
+
+if "quiz_answers" not in st.session_state:
+    st.session_state.quiz_answers = {}
 
 # -------------------------
 # CLIENT
@@ -101,10 +229,16 @@ def create_prompt(topic, mode, audience, language, style,length_instruction,prom
         """
 
     elif mode == "Quiz":
-        return base_prompt + common + """
-        Create 5 multiple-choice questions.
-        Each question must have 4 options.
-        Include correct answers and explanations.
+        return base_prompt + common + f"""
+        Generate a quiz about: {topic}
+
+        You must follow these rules:
+        - Return exactly 5 multiple-choice questions.
+        - Each question must have exactly 4 options.
+        - Include one correct answer and a short explanation.
+        - The topic field must contain ONLY the topic name: {topic}
+        - Do NOT write a lecture, introduction, summary, or tutorial.
+        - Do NOT include code examples in the topic field.
         """
 
 
@@ -118,11 +252,9 @@ def type_prompt(topic,audience,style, prompt_type, length_instruction):
 
     elif prompt_type == "Role-based":
         return f"""
-            You are an experienced {style} who specializes
-            in teaching computer science and DSA.
-            Adapt your teaching style to a {audience} student.
-            Explain {topic} in simple language.
-            Give a practical example.
+            You are helping a {audience} student.
+            Use simple and clear language.
+            Follow the requested task carefully.
             """
 
     elif prompt_type == "Constraint-based":
@@ -179,6 +311,8 @@ def generate_response(topic,mode,audience,language,style,length_guide,prompt_typ
         return
 
     length_instruction = length_guide[length]
+    schema=get_schema(mode)
+
     prompt = create_prompt(
         topic, mode, audience, language, style, length_instruction,prompt_type
     )
@@ -187,13 +321,27 @@ def generate_response(topic,mode,audience,language,style,length_guide,prompt_typ
         with st.spinner("AI is preparing your learning material..."):
 
             response = client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt
+                model="gemini-3.8-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=schema
+                )
             )
+            data=json.loads(response.text)
 
-        st.session_state.result = response.text or "No response received."
+            if mode == "Quiz":
+                if not validate_quiz(data):
+                    st.error("AI returned an invalid quiz structure.")
+                    return
+
+        st.session_state.result = data
         st.session_state.last_topic = topic
         st.session_state.last_mode = mode
+        st.session_state.quiz_answers = {}
+    
+    except json.JSONDecodeError:
+        st.error("AI returned invalid JSON. Please try again.")
 
     except Exception as error:
         st.error(f"Something went wrong: {error}")
@@ -240,11 +388,75 @@ if st.session_state.result:
     )
 
     with st.container(border=True):
-        st.markdown(st.session_state.result)
+
+        data = st.session_state.result
+        mode = st.session_state.last_mode
+
+        if mode == "Explain":
+
+            st.header(data["title"])
+
+            st.subheader("Definition")
+            st.write(data["definition"])
+
+            st.subheader("Key Points")
+            for point in data["key_points"]:
+                st.markdown(f"- {point}")
+
+            st.subheader("Practical Example")
+            st.code(data["example"], language="cpp")
+
+
+        elif mode == "Summarize":
+
+            st.header(data["title"])
+
+            st.subheader("Summary")
+            st.write(data["summary"])
+
+            st.subheader("Key Points")
+            for point in data["key_points"]:
+                st.markdown(f"- {point}")
+
+
+        elif mode == "Quiz":
+
+            st.header(data["topic"])
+
+            for i, question in enumerate(data["questions"]):
+                st.subheader(f"Q{i + 1}. {question['question']}")
+                answer = st.radio(
+                    "Choose your answer:",
+                    question["options"],
+                    key=f"quiz_{i}",
+                    index=None
+                )
+
+                if answer is not None:
+                    st.session_state.quiz_answers[i] = answer
+
+            if st.button("Submit Quiz"):
+                if len(st.session_state.quiz_answers) != len(data["questions"]):
+                    st.warning("Please answer all questions first.")
+                else:
+                    score = 0
+                    for i, question in enumerate(data["questions"]):
+                        user_answer = st.session_state.quiz_answers[i]
+                        if user_answer == question["correct_answer"]:
+                            score += 1
+                            st.success(f"Q{i + 1}: Correct!")
+                        else:
+                            st.error(
+                                f"Q{i + 1}: Incorrect. Correct answer: "
+                                f"{question['correct_answer']}"
+                            )
+
+                        st.info(f"Explanation: {question['explanation']}")
+                    st.subheader(f"Your Score: {score}/{len(data['questions'])}")
 
     st.download_button(
         label="📥 Download Notes",
-        data=st.session_state.result,
+        data=json.dumps(st.session_state.result,indent=4),
         file_name="study_notes.txt",
         mime="text/plain"
     )
@@ -253,4 +465,5 @@ if st.session_state.result:
         st.session_state.result = ""
         st.session_state.last_topic = ""
         st.session_state.last_mode = ""
+        st.session_state.quiz_answers = {}
         st.rerun()

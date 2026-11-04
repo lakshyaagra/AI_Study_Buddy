@@ -344,7 +344,11 @@ def generate_response(topic,mode,audience,language,style,length_guide,prompt_typ
         st.error("AI returned invalid JSON. Please try again.")
 
     except Exception as error:
-        st.error(f"Something went wrong: {error}")
+        print(f"Technical error: {error}")
+        st.error(
+            "Unable to generate your response. "
+            "Please check your internet connection and try again."
+        )
 
 
 # -------------------------

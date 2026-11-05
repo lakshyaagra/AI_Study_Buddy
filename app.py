@@ -342,16 +342,20 @@ def generate_response(topic,mode,audience,language,style,length_guide,prompt_typ
             usage = response.usage_metadata
 
             if usage:
-                input_tokens = usage.prompt_token_count or 0
-                output_tokens = usage.candidates_token_count or 0
-                total_tokens = usage.total_token_count or 0
-
+                st.session_state.input_tokens = usage.prompt_token_count or 0
+                st.session_state.output_tokens = usage.candidates_token_count or 0
+                st.session_state.total_tokens = usage.total_token_count or 0
             else:
                 st.session_state.input_tokens = 0
                 st.session_state.output_tokens = 0
                 st.session_state.total_tokens = 0
 
             data=json.loads(response.text)
+
+            # Fix for escaped newlines in C++ code example
+            if mode == "Explain" and "example" in data:
+                # Agar JSON mein \\n ki tarah escape hokar aaya hai toh use proper newline bana dega
+                data["example"] = data["example"].replace("\\n", "\n")
 
             if mode == "Quiz":
                 if not validate_quiz(data):
